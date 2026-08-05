@@ -74,6 +74,16 @@ FEED_CARRY = 6
 MELON_CAP = int(_env("KAG_MELON_CAP", 40))
 MELON_DIV = int(_env("KAG_MELON_DIV", 3))
 MELON_MIN_DAY = int(_env("KAG_MELON_MIN_DAY", 2))
+# Opening melon push: for the first N days, this fraction of owned tiles goes to melon
+# ignoring the usual cash reserve. See the race note in _melon_target.
+MELON_OPENING_DAYS = int(_env("KAG_MELON_OPENING_DAYS", 1))
+# 0.3 is a sharp optimum, settled head-to-head: it beats 0.0 (4/4), 0.2 (4/4),
+# 0.35 (4/4) and 0.5 (4/4, and 0.5 collapses -- past ~a third of tiles the seed spend
+# starves land and crew). Note this *costs* ~4% against `starter` while gaining ~40%
+# contested; the leaderboard scores head-to-head wins, so contested is what counts.
+MELON_OPENING_FRAC = float(_env("KAG_MELON_OPENING_FRAC", 0.3))
+# Cash floor below which melon planting pauses outside the opening.
+MELON_MIN_MONEY = int(_env("KAG_MELON_MIN_MONEY", 900))
 # Stop sowing melon once the market has been driven this low: past here the marginal
 # melon is heading for the $1 floor and the tile is worth more under wheat.
 MELON_PRICE_MIN = int(_env("KAG_MELON_PRICE_MIN", 90))
@@ -156,9 +166,26 @@ def _melon_target(day, unlocked_tiles, money, melon_price, rival_melon):
     """
     if day + CROPS["MELON"]["maxday"] > LAST_DAY:
         return 0
-    if day < MELON_MIN_DAY or money < 900:
-        return 0
     if melon_price < MELON_PRICE_MIN:
+        return 0
+
+    # The opening melon wave is winner-take-all. Melon cannot be harvested before
+    # age 10 no matter how well it is tended, so the first farm to plant is the first
+    # to sell, and it sells into an uncrashed curve -- ~$22k for ~144 melons at $278.
+    # Whoever arrives second gets the remainder at $25, then $1.
+    #
+    # Losing that race cost us a ranked episode (20,606 vs 25,230): the rival sowed 24
+    # tiles on day 0 while we were still building land and crew, so we reached market
+    # on day 16 at $115 instead of day 11 at $278.
+    #
+    # But going all-in is worse still (loses 0/4 head-to-head): 25 tiles of melon eat
+    # the whole opening bank, and with no wheat income the farm cannot buy land or
+    # crew for eleven days, which costs more than the windfall earns. So we take a
+    # fraction early -- enough to reach market on time, not so much that growth stops.
+    if day <= MELON_OPENING_DAYS:
+        return int(unlocked_tiles * MELON_OPENING_FRAC)
+
+    if day < MELON_MIN_DAY or money < MELON_MIN_MONEY:
         return 0
     target = min(MELON_CAP, unlocked_tiles // MELON_DIV)
     # Every melon the rival grows eats the same finite stretch of curve above the
@@ -299,16 +326,34 @@ def agent(obs):
         near = sorted(empty, key=lambda c: abs(c[0] - mid) + abs(c[1] - mid))
         coop_sites = set(near[:coop_slots])
 
+    # Allocate every free tile to a purpose first, independent of the seed actually in
+    # hand, so seed buying can be driven by the real plan. Otherwise an all-melon
+    # opening still buys a stack of wheat seed for tiles that will never take it.
+    plan = []
+    want_melon = melon_slots
     for x, y in empty:
         if (x, y) in coop_sites:
+            plan.append((x, y, "COOP"))
+        elif want_melon > 0:
+            plan.append((x, y, "MELON"))
+            want_melon -= 1
+        elif staple:
+            plan.append((x, y, staple))
+
+    # Emit work only where the seed exists: the env drops *all* PLANT requests for a
+    # crop when they exceed supply, so a single over-request wastes the whole turn.
+    on_hand = {"MELON": melon_seeds}
+    if staple:
+        on_hand[staple] = staple_seeds
+    demand = {}
+    for x, y, what in plan:
+        if what == "COOP":
             jobs.append((P_BUILD, x, y, ["BUILD_COOP"]))
-        elif melon_slots > 0 and melon_seeds > 0:
-            jobs.append((P_PLANT, x, y, ["PLANT", "MELON"]))
-            melon_slots -= 1
-            melon_seeds -= 1
-        elif staple and staple_seeds > 0:
-            jobs.append((P_PLANT, x, y, ["PLANT", staple]))
-            staple_seeds -= 1
+            continue
+        demand[what] = demand.get(what, 0) + 1
+        if on_hand.get(what, 0) > 0:
+            jobs.append((P_PLANT, x, y, ["PLANT", what]))
+            on_hand[what] -= 1
 
     # ------------------------------------------------------------- territory
     # Territory, not free-for-all. Assigning every job to the globally nearest unit
@@ -463,24 +508,22 @@ def agent(obs):
         if money >= cost + 400 and day <= 22:
             market.append(["BUY_LAND"])
 
-    # Melon seed first -- it is the scarce, high-value allocation; the staple soaks up
-    # whatever tiles are left over.
-    if melon_wanted > 0:
-        have = seeds.get("MELON", 0)
-        spare = int(money) - 600
-        if have < melon_wanted and spare > 0:
-            buy = min(melon_wanted - have, spare // CROPS["MELON"]["seed"])
+    # Buy exactly what the tile plan calls for. Melon goes first -- it is the scarce,
+    # high-value allocation and during the opening race it takes priority over the
+    # cash buffer entirely.
+    opening = day <= MELON_OPENING_DAYS
+    for crop, reserve in (("MELON", 100 if opening else 600), (staple, 300)):
+        if not crop:
+            continue
+        want = demand.get(crop, 0)
+        if crop == staple and not opening:
+            want = min(want + 4, 40)   # small buffer so tiles never idle mid-season
+        have = seeds.get(crop, 0)
+        spare = int(money) - reserve
+        if want > have and spare > 0:
+            buy = min(want - have, spare // CROPS[crop]["seed"])
             if buy > 0:
-                market.append(["BUY_SEED", "MELON", buy])
-
-    if staple is not None:
-        want = min(len(empty) + 4, 40)
-        have = seeds.get(staple, 0)
-        spare = int(money) - 300
-        if have < want and spare > 0:
-            buy = min(want - have, spare // CROPS[staple]["seed"])
-            if buy > 0:
-                market.append(["BUY_SEED", staple, buy])
+                market.append(["BUY_SEED", crop, buy])
 
     # Buy a bird for every coop that is standing empty and not already spoken for by
     # one sitting in the shed. BUY_ANIMAL lands in the shed and silently fails when
