@@ -128,6 +128,35 @@ with cheaper feed logistics (a dedicated ranch abutting the shed was never tried
 Denser crashes the price past its quadratic glut curve; sparser leaves the market
 unexploited. Crew size (`HAND_CAP` 12 -> 20) moves the result under 1.5%, inside noise.
 
+## Competitive findings (head-to-head, `h2h.py`)
+
+Leaderboard rating comes from winning episodes, not absolute money, so these were
+settled by playing parameter settings against each other with seats swapped -- not by
+scoring against `starter`.
+
+| Question | Result |
+|---|---|
+| Back off melon when the rival grows it? | **No** -- backing off loses 0/4 |
+| Melon density under contention | **33 tiles wins 4/4** over 50 tiles |
+| Plant melon from day 0 instead of day 2? | Wash (2/4), keep day 2 |
+| Melon price guard at $90 | Inert -- never fires, kept as a safety valve |
+| Staple crop: carrot instead of wheat? | **No** -- 24,302 vs wheat's 61,151 |
+| Unload threshold | 10 optimal; 18+ collapses to ~43,000 |
+
+Two of these are worth remembering because they are counterintuitive:
+
+- **Melon is a race, not a commons to be managed.** Both farms are public, so a rival's
+  melon acreage is visible on day 2. Backing off raises *both* scores -- a cooperative
+  equilibrium -- but loses head-to-head, because conceding acreage hands the
+  profitable stretch of the curve to the opponent. We race instead.
+- **Carrot loses on capital, not price.** Its price genuinely is better on the volume
+  we produce (staple output stays far under the 866-unit floor), but $20/seed on a
+  shorter cycle burns ~2x the cash per tile-day and starves melon seed and land
+  exactly when they compound. Unit economics lost to cash-flow timing.
+
+Higher unload thresholds collapse the score because the end-of-day drop overflows the
+100-item shed and the excess is **discarded**, not held over.
+
 ## Open risks
 
 1. **The melon market is shared, and this strategy depends on it.** In self-play the

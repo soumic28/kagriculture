@@ -58,8 +58,10 @@ P_PLANT = 6
 P_BUILD = 6
 P_DIG = 4
 
-# Carry this many items before a unit walks back to the shed to unload.
-DROP_THRESHOLD = 10
+# Carry this many items before a unit walks back to the shed to unload. Higher means
+# fewer round trips but risks the end-of-day drop overflowing the 100-item shed,
+# where the excess is discarded outright.
+DROP_THRESHOLD = int(_env("KAG_DROP_THRESHOLD", 10))
 
 GOOSE_COST = 300
 # Wheat kept in the shed as animal feed rather than sold.
@@ -72,6 +74,19 @@ FEED_CARRY = 6
 MELON_CAP = int(_env("KAG_MELON_CAP", 40))
 MELON_DIV = int(_env("KAG_MELON_DIV", 3))
 MELON_MIN_DAY = int(_env("KAG_MELON_MIN_DAY", 2))
+# Stop sowing melon once the market has been driven this low: past here the marginal
+# melon is heading for the $1 floor and the tile is worth more under wheat.
+MELON_PRICE_MIN = int(_env("KAG_MELON_PRICE_MIN", 90))
+# How strongly to back off when the opponent is also growing melon. Both farms are
+# public, so contention is visible on day 2 rather than when the price collapses on
+# day 10.
+#
+# Measured at 0: backing off LOSES head-to-head 0/4. Melon is a race down a shared
+# curve, and conceding acreage just hands the profitable stretch to the rival. Mutual
+# backoff does raise both scores -- a cooperative equilibrium -- but a leaderboard
+# opponent will not honour it, so we race. Kept as a dial because the trade would
+# flip if scoring ever rewarded absolute money over head-to-head wins.
+MELON_RIVAL_SHARE = float(_env("KAG_MELON_RIVAL_SHARE", 0.0))
 # Geese are off by default. Measured head-to-head they cost more than they earn: a
 # melon tile returns ~$150 per unit-action against a goose's ~$25, and $300/bird
 # starves the melon-seed and land pipeline exactly when it matters. The husbandry
@@ -82,6 +97,14 @@ GOOSE_DIV = int(_env("KAG_GOOSE_DIV", 5))
 GOOSE_MIN_DAY = int(_env("KAG_GOOSE_MIN_DAY", 0))
 HAND_CAP = int(_env("KAG_HAND_CAP", 16))
 HAND_DIV = int(_env("KAG_HAND_DIV", 8))
+# Cash-flow crop filling tiles that melon does not take.
+#
+# Wheat, measured: 61,151 vs carrot's 24,302. Carrot has the better price on the
+# volume we actually produce (staple output stays well under its 866-unit floor), but
+# that is swamped by capital cost -- $20/seed against wheat's $10, on a shorter cycle,
+# so it burns roughly double the cash per tile-day and starves melon seed and land
+# exactly when they compound.
+STAPLE = _env("KAG_STAPLE", "WHEAT")
 
 
 def _window_start(crop):
@@ -111,18 +134,16 @@ def _step_toward(pos, target):
 def _staple(day):
     """Cash-flow crop for a free tile, given how many days are left to mature.
 
-    Wheat's glut curve is logarithmic, so it still fetches ~$18 after 2400 units,
-    while carrot hits the $1 floor at 866. Carrot only appears at the very end of the
-    season, when its shorter maturity is the only thing that still fits.
+    Wheat wins on capital efficiency rather than price -- see the STAPLE note above.
+    Falls back to whatever still has time to ripen as the season runs out.
     """
-    if day + CROPS["WHEAT"]["maxday"] <= LAST_DAY:
-        return "WHEAT"
-    if day + CROPS["CARROT"]["maxday"] <= LAST_DAY:
-        return "CARROT"
+    for crop in (STAPLE, "CARROT", "WHEAT"):
+        if day + CROPS[crop]["maxday"] <= LAST_DAY:
+            return crop
     return None
 
 
-def _melon_target(day, unlocked_tiles, money):
+def _melon_target(day, unlocked_tiles, money, melon_price, rival_melon):
     """How many tiles should be carrying melon right now.
 
     Melon is worth roughly 14x wheat per unit and *fewer* actions per tile-day, but
@@ -137,7 +158,12 @@ def _melon_target(day, unlocked_tiles, money):
         return 0
     if day < MELON_MIN_DAY or money < 900:
         return 0
-    return min(MELON_CAP, unlocked_tiles // MELON_DIV)
+    if melon_price < MELON_PRICE_MIN:
+        return 0
+    target = min(MELON_CAP, unlocked_tiles // MELON_DIV)
+    # Every melon the rival grows eats the same finite stretch of curve above the
+    # $1 floor, so their planted acreage directly displaces the value of ours.
+    return max(0, target - int(rival_melon * MELON_RIVAL_SHARE))
 
 
 def _goose_target(day, unlocked_tiles, money, current):
@@ -174,6 +200,20 @@ def agent(obs):
     positions = [list(me["farmer"])] + [list(p) for p in me["hands"]]
     n_units = len(positions)
     acts = [["PASS"] for _ in range(n_units)]
+
+    prices = obs["market"]["prices"]
+
+    # Both farms are public. Counting the rival's melon plots reveals a coming glut
+    # around day 10 while there is still time to plant something else, instead of
+    # finding out when the price collapses with our own crop already in the ground.
+    rival_melon = 0
+    for other in range(len(obs["farms"])):
+        if other == player:
+            continue
+        for row in obs["farms"][other]["tiles"]:
+            for t in row:
+                if isinstance(t, dict) and t.get("crop") == "MELON":
+                    rival_melon += 1
 
     # ---------------------------------------------------------------- survey
     jobs = []          # (priority, x, y, action)
@@ -241,7 +281,8 @@ def agent(obs):
     # Never emit more PLANT jobs than seeds held: the env drops *all* PLANT requests
     # for a crop when they exceed supply, so these counters decrement per job.
     staple = _staple(day)
-    melon_slots = max(0, _melon_target(day, unlocked_tiles, money) - melon_count)
+    melon_slots = max(0, _melon_target(
+        day, unlocked_tiles, money, prices.get("MELON", 250), rival_melon) - melon_count)
     melon_seeds = seeds.get("MELON", 0)
     staple_seeds = seeds.get(staple, 0) if staple else 0
     melon_wanted = melon_slots
@@ -296,7 +337,15 @@ def agent(obs):
     # Errands that a tile job cannot express, because they depend on what a unit is
     # carrying rather than on what a tile needs. Each claims its unit for the turn.
     open_shed = [(sx, sy) for (sx, sy) in _shed_tiles(n) if tiles[sy][sx] != "LOCKED"]
-    endgame = day >= LAST_DAY and hour >= 10
+    # Goods in the shed or in a unit's hands at the buzzer score nothing, and the
+    # end-of-day drop never runs on the final day. So from here units run everything
+    # back; past `closing` they stop picking up new work that could not be sold.
+    endgame = day >= LAST_DAY and hour >= 8
+    closing = day >= LAST_DAY and hour >= 14
+    if closing:
+        jobs = [j for j in jobs if j[3][0] in ("HARVEST", "DIG")]
+    if day >= LAST_DAY and hour >= 20:
+        jobs = []
 
     shed_geese = shed.get("GOOSE", 0)
     shed_wheat = shed.get("WHEAT", 0)
