@@ -30,9 +30,30 @@ def _env(name, default):
 # first_yield_day. Only one-time crops are used; the ongoing crops (tomato,
 # strawberry) have low revenue ceilings and are not worth the tile-days.
 CROPS = {
-    "WHEAT":  {"seed": 10, "first": 2,  "maxday": 4,  "maxyield": 6},
-    "CARROT": {"seed": 20, "first": 2,  "maxday": 3,  "maxyield": 4},
-    "MELON":  {"seed": 80, "first": 10, "maxday": 12, "maxyield": 6},
+    "WHEAT":      {"seed": 10,  "first": 2,  "maxday": 4,  "maxyield": 6, "ongoing": False},
+    "CARROT":     {"seed": 20,  "first": 2,  "maxday": 3,  "maxyield": 4, "ongoing": False},
+    "MELON":      {"seed": 80,  "first": 10, "maxday": 12, "maxyield": 6, "ongoing": False},
+    "TOMATO":     {"seed": 50,  "first": 8,  "maxday": 8,  "maxyield": 4, "ongoing": True},
+    "STRAWBERRY": {"seed": 100, "first": 10, "maxday": 10, "maxyield": 4, "ongoing": True},
+}
+
+# Target share of workable tiles per crop.
+#
+# Every product has its OWN price curve with its own glut ceiling, so volume spread
+# across products earns far more than the same volume in one. Summed ceilings are
+# ~$119k against melon's ~$26k alone -- and ranked replays bear it out: the agents
+# beating us run every crop plus livestock (one scored 106,946 with eight products on
+# the board) while our melon-and-wheat monoculture topped out around 60k.
+#
+# Shares are set so each crop's season output lands near its own ceiling rather than
+# past it: melon saturates at ~300 units, strawberry at only ~62, wheat effectively
+# never. Wheat also doubles as animal feed.
+CROP_MIX = {
+    "MELON":      float(_env("KAG_MIX_MELON", 0.26)),
+    "WHEAT":      float(_env("KAG_MIX_WHEAT", 0.22)),
+    "CARROT":     float(_env("KAG_MIX_CARROT", 0.18)),
+    "TOMATO":     float(_env("KAG_MIX_TOMATO", 0.20)),
+    "STRAWBERRY": float(_env("KAG_MIX_STRAWBERRY", 0.14)),
 }
 
 PRODUCTS = (
@@ -97,12 +118,16 @@ MELON_PRICE_MIN = int(_env("KAG_MELON_PRICE_MIN", 90))
 # opponent will not honour it, so we race. Kept as a dial because the trade would
 # flip if scoring ever rewarded absolute money over head-to-head wins.
 MELON_RIVAL_SHARE = float(_env("KAG_MELON_RIVAL_SHARE", 0.0))
-# Geese are off by default. Measured head-to-head they cost more than they earn: a
-# melon tile returns ~$150 per unit-action against a goose's ~$25, and $300/bird
-# starves the melon-seed and land pipeline exactly when it matters. The husbandry
-# code is kept because that trade flips if an opponent contests the melon market --
-# egg and fertilizer demand is untouched by both built-in agents.
-GOOSE_CAP = int(_env("KAG_GOOSE_CAP", 0))
+# A small flock pays, but only alongside a diversified crop mix -- the trade flipped
+# once tiles stopped being a melon monoculture. Under monoculture a melon tile
+# returned ~$150 per unit-action against a goose's ~$25 and birds lost outright; with
+# the mix in place they open two markets nothing else reaches (egg is logarithmic and
+# effectively never gluts, and fertilizer accrues 1/animal/day whether or not the
+# animal was fed or cared for).
+#
+# Measured at 5 episodes: 4 birds 68,600, 6 birds 64,491, none 64,059 -- and 12 birds
+# collapses to ~41,000, where feed round-trips and $300/head crowd out the crops.
+GOOSE_CAP = int(_env("KAG_GOOSE_CAP", 4))
 GOOSE_DIV = int(_env("KAG_GOOSE_DIV", 5))
 GOOSE_MIN_DAY = int(_env("KAG_GOOSE_MIN_DAY", 0))
 HAND_CAP = int(_env("KAG_HAND_CAP", 16))
@@ -140,17 +165,6 @@ def _step_toward(pos, target):
         return ["NORTH"]
     return ["PASS"]
 
-
-def _staple(day):
-    """Cash-flow crop for a free tile, given how many days are left to mature.
-
-    Wheat wins on capital efficiency rather than price -- see the STAPLE note above.
-    Falls back to whatever still has time to ripen as the season runs out.
-    """
-    for crop in (STAPLE, "CARROT", "WHEAT"):
-        if day + CROPS[crop]["maxday"] <= LAST_DAY:
-            return crop
-    return None
 
 
 def _melon_target(day, unlocked_tiles, money, melon_price, rival_melon):
@@ -246,7 +260,7 @@ def agent(obs):
     jobs = []          # (priority, x, y, action)
     empty = []
     unlocked_tiles = 0
-    melon_count = 0
+    grown = {}         # crop -> tiles currently carrying it
     coop_count = 0
     animal_count = 0
     open_coops = []    # built but unoccupied
@@ -270,15 +284,21 @@ def agent(obs):
                 c = CROPS.get(crop)
                 if c is None:
                     continue
-                if crop == "MELON":
-                    melon_count += 1
+                grown[crop] = grown.get(crop, 0) + 1
                 age = day - t["planted_day"]
-                in_window = _window_start(crop) <= age <= c["maxday"]
                 watered = t["watered_today"]
                 units = t["yield_units"]
-                ripe = age >= c["first"] and units > 0 and (
-                    units >= c["maxyield"] or age >= c["maxday"]
-                )
+                # Ongoing crops (tomato, strawberry) get no watering bonus and are not
+                # pulled on harvest -- they keep producing on a schedule, so take the
+                # fruit the moment it appears and leave the plant standing.
+                if c["ongoing"]:
+                    in_window = False
+                    ripe = units > 0 and age >= c["first"]
+                else:
+                    in_window = _window_start(crop) <= age <= c["maxday"]
+                    ripe = age >= c["first"] and units > 0 and (
+                        units >= c["maxyield"] or age >= c["maxday"]
+                    )
                 if in_window and not watered:
                     jobs.append((P_WATER_BONUS, x, y, ["WATER"]))
                 elif ripe:
@@ -304,15 +324,27 @@ def agent(obs):
                 if not t["cared_today"]:
                     jobs.append((P_CARE, x, y, ["CARE"]))
 
-    # Fill free tiles with melon up to its ceiling, then the cash-flow staple.
-    # Never emit more PLANT jobs than seeds held: the env drops *all* PLANT requests
-    # for a crop when they exceed supply, so these counters decrement per job.
-    staple = _staple(day)
-    melon_slots = max(0, _melon_target(
-        day, unlocked_tiles, money, prices.get("MELON", 250), rival_melon) - melon_count)
-    melon_seeds = seeds.get("MELON", 0)
-    staple_seeds = seeds.get(staple, 0) if staple else 0
-    melon_wanted = melon_slots
+    # Decide how many tiles each crop should hold, then fill the gaps. Crops are
+    # ordered by how badly they are under quota so no single crop monopolises a burst
+    # of free tiles.
+    deficits = []
+    for crop, share in CROP_MIX.items():
+        c = CROPS[crop]
+        # Nothing that cannot reach its first yield before the season ends.
+        if day + c["first"] > LAST_DAY:
+            continue
+        if crop == "MELON":
+            target = _melon_target(day, unlocked_tiles, money,
+                                   prices.get("MELON", 250), rival_melon)
+        else:
+            target = int(unlocked_tiles * share)
+            # A crop already at the $1 floor is worth less than bare dirt.
+            if prices.get(crop, 99) <= 2:
+                target = 0
+        gap = target - grown.get(crop, 0)
+        if gap > 0:
+            deficits.append((gap, crop))
+    deficits.sort(reverse=True)
 
     goose_goal = _goose_target(day, unlocked_tiles, money, coop_count)
     coop_slots = max(0, goose_goal - coop_count)
@@ -330,21 +362,23 @@ def agent(obs):
     # hand, so seed buying can be driven by the real plan. Otherwise an all-melon
     # opening still buys a stack of wheat seed for tiles that will never take it.
     plan = []
-    want_melon = melon_slots
+    queue = [[gap, crop] for gap, crop in deficits]
     for x, y in empty:
         if (x, y) in coop_sites:
             plan.append((x, y, "COOP"))
-        elif want_melon > 0:
-            plan.append((x, y, "MELON"))
-            want_melon -= 1
-        elif staple:
-            plan.append((x, y, staple))
+            continue
+        # Round-robin over the under-quota crops, worst deficit first, so a batch of
+        # freed tiles gets spread across the mix instead of going to one crop.
+        pick = next((q for q in queue if q[0] > 0), None)
+        if pick is None:
+            break
+        pick[0] -= 1
+        plan.append((x, y, pick[1]))
+        queue.sort(reverse=True)
 
     # Emit work only where the seed exists: the env drops *all* PLANT requests for a
     # crop when they exceed supply, so a single over-request wastes the whole turn.
-    on_hand = {"MELON": melon_seeds}
-    if staple:
-        on_hand[staple] = staple_seeds
+    on_hand = {crop: seeds.get(crop, 0) for crop in CROPS}
     demand = {}
     for x, y, what in plan:
         if what == "COOP":
@@ -511,13 +545,20 @@ def agent(obs):
     # Buy exactly what the tile plan calls for. Melon goes first -- it is the scarce,
     # high-value allocation and during the opening race it takes priority over the
     # cash buffer entirely.
+    # Melon goes first -- during the opening race it takes priority over the cash
+    # buffer entirely. Order the rest by seed cost so a cheap crop is never blocked
+    # behind an unaffordable one, and cap the orders so market slots stay free for
+    # selling and hiring.
     opening = day <= MELON_OPENING_DAYS
-    for crop, reserve in (("MELON", 100 if opening else 600), (staple, 300)):
-        if not crop:
-            continue
+    order = ["MELON"] + sorted((c for c in CROPS if c != "MELON"),
+                               key=lambda c: CROPS[c]["seed"])
+    for crop in order:
+        if len(market) >= MAX_ORDERS - 2:
+            break
         want = demand.get(crop, 0)
-        if crop == staple and not opening:
-            want = min(want + 4, 40)   # small buffer so tiles never idle mid-season
+        if not want:
+            continue
+        reserve = (100 if opening else 600) if crop == "MELON" else 300
         have = seeds.get(crop, 0)
         spare = int(money) - reserve
         if want > have and spare > 0:
