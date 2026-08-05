@@ -9,7 +9,8 @@ tried, not just what's in the current working tree.
 | 2026-08-05 | `a45bfac` | v2 engine + melon | 60,569 | — | _not submitted_ | — |
 | 2026-08-05 | `e3f632f` | v2 tuned, geese off | 61,541 | — | _not submitted_ | — |
 | 2026-08-05 | `6806577` | v3 opponent-aware, h2h tuned | 60,601 | 27,617 | 55268942 | 602.1 |
-| 2026-08-05 | `0a9c4e6` | v4 opening melon race (frac 0.3) | 56,200 | 25,315 | **55269367** | 600.0 (seeding) |
+| 2026-08-05 | `dcbbe11` | v4 opening melon race (frac 0.3) | 56,200 | 25,315 | 55269367 | 599.0 |
+| 2026-08-05 | `HEAD` | **v5 diversified mix + 4 geese** | **67,515** | **41,151** | **55269657** | _pending_ |
 
 v4 scores *lower* than v3 against `starter` on purpose. It beats v3 **4/4 head-to-head**
 (29,030 vs 20,760), which is what the leaderboard actually measures. See FINDINGS.md.

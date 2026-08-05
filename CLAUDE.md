@@ -35,13 +35,26 @@ the end of a 720-turn season (30 days × 24 turns/day).
   don't rely on memory or Kaggle's UI as the source of truth across sessions.
 
 ## What actually drives the score
-Melon. It is worth ~14x wheat per unit at fewer actions per tile-day, and neither
-built-in agent ever sells it, so town demand holds it near $250-290. Everything
-else is support: wheat funds the opening, land multiplies tiles, hands supply
-actions. Two counterintuitive, *measured* results:
-- **Geese lose money** (~$25/action vs melon's ~$150) and are off by default.
-- **Melon density has an optimum** near 33 tiles; more crashes its quadratic
-  glut curve, less leaves the market unexploited.
+**Diversification.** Every product has an independent price curve with its own
+glut ceiling, so volume spread across products earns far more than the same
+volume in one — summed ceilings are ~$119k against melon's ~$26k alone. Ranked
+replays confirm it: the agents beating us farm all five crops plus livestock
+(one scored 106,946), while our melon+wheat monoculture topped out near 60k.
+
+Melon still matters for *timing*, not share: it cannot be harvested before age
+10, so the first wave is winner-take-all — first to plant sells at ~$278, second
+gets $25 then $1. Hence the opening push at ~0.3 of tiles.
+
+**Optima are sharp and non-monotonic — always bracket a dial.** 4 geese beat 6
+and 0, and 12 collapses. 33 melon tiles beat 50 and 25.
+
+## Read the replays before tuning
+This is the highest-value habit in this project. Each ranked replay contains the
+opponent's whole farm turn by turn; `scout.py` mines them. Five games revealed
+the diversification meta and reversed a strategy already tuned hard the wrong
+way. Local tuning misleads because `starter` is a single-tile carrot loop that
+never sells melon, eggs, milk or wool — beating it rewards exploiting whatever
+it ignores, which looks like monoculture.
 
 ## Dev workflow
 ```bash
@@ -70,6 +83,18 @@ result N times in this env — its RNG appears to be seeded once per
 works around this by calling `evaluate()` N separate times in a loop. If you
 ever see identical scores across "different" episodes, this is why — check
 you're not accidentally relying on `num_episodes=N` directly somewhere.
+
+## Sustaining a ladder position
+The rating is a skill rating seeded at 600, and it moves only as ranked episodes
+play. The loop that works:
+1. `kaggle competitions episodes <SUB_ID>` → download replays → `python scout.py`
+2. Any loss where the opponent scored far higher: read what they farmed
+3. Reproduce the idea locally, decide it with `h2h.py`, submit only if it wins
+4. Log it in `SUBMISSIONS.md`
+
+Only the latest 2 submissions count for final evaluation and only the best shows
+on the board, so **never submit an unmeasured experiment** — it can displace a
+good agent. 5/day.
 
 ## Roadmap (rough priority order)
 1. **Contested-market robustness** — the biggest open risk. Self-play drops us
