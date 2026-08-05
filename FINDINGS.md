@@ -157,6 +157,33 @@ Two of these are worth remembering because they are counterintuitive:
 Higher unload thresholds collapse the score because the end-of-day drop overflows the
 100-item shed and the excess is **discarded**, not held over.
 
+## The opening melon race (learned from a ranked loss)
+
+Melon cannot be harvested before age 10 however well it is tended, so **the first
+melon wave is winner-take-all**. The first farm to plant reaches an uncrashed curve
+(~$278/unit, ~$22k for one 24-tile harvest); the second gets $25, then $1. No town
+shop demands melon, so the price never recovers.
+
+Opening fraction of tiles committed to melon (`KAG_MELON_OPENING_FRAC`), head-to-head:
+
+| Matchup | Result |
+|---|---|
+| 0.3 vs 0.0 (no push) | **0.3 wins 4/4** — 29,030 vs 20,760 |
+| 0.3 vs 0.2 | 0.3 wins 4/4 — 28,748 vs 21,730 |
+| 0.3 vs 0.35 | 0.3 wins 4/4 — 26,223 vs 23,695 |
+| 0.3 vs 0.5 | 0.3 wins 4/4 — 42,288 vs **15,080** (0.5 collapses) |
+| all-in (1.0) vs 0.0 | all-in **loses** 0/4 |
+
+Sharply peaked, and both extremes fail for opposite reasons: too little arrives ~5
+days late to market; too much spends so heavily on seed that land and crew stall for
+the eleven days before the first harvest. Note the rival that beat us played all-in —
+their strategy was beatable, not optimal.
+
+**`sweep.py` and `h2h.py` disagree here, and `h2h.py` is right.** `starter` never sells
+melon, so vs-starter runs reward patient farm-building: the opening push costs ~4%
+there (60,601 -> 56,200) while gaining ~40% contested. Rating comes from head-to-head
+wins. Decide strategy with `h2h.py`.
+
 ## Open risks
 
 1. **The melon market is shared, and this strategy depends on it.** In self-play the

@@ -8,7 +8,19 @@ tried, not just what's in the current working tree.
 |------|-----------|-------------|--------------------|-----------|----------------------|-----------|
 | 2026-08-05 | `a45bfac` | v2 engine + melon | 60,569 | — | _not submitted_ | — |
 | 2026-08-05 | `e3f632f` | v2 tuned, geese off | 61,541 | — | _not submitted_ | — |
-| 2026-08-05 | `6806577` | v3 opponent-aware, h2h tuned | **60,601** | 27,617 | **55268942** | 600.0 (seeding) |
+| 2026-08-05 | `6806577` | v3 opponent-aware, h2h tuned | 60,601 | 27,617 | 55268942 | 602.1 |
+| 2026-08-05 | `0a9c4e6` | v4 opening melon race (frac 0.3) | 56,200 | 25,315 | **55269367** | 600.0 (seeding) |
+
+v4 scores *lower* than v3 against `starter` on purpose. It beats v3 **4/4 head-to-head**
+(29,030 vs 20,760), which is what the leaderboard actually measures. See FINDINGS.md.
+
+### Ranked episode 90166459 -- the loss that produced v4
+
+Lost 20,606 to 25,230. No crash, no timeout (max 38 ms). The rival sowed 24 melon
+tiles on day 0, reached market on day 11 at $278 and banked ~$22k in a single harvest,
+then replanted. We didn't sell melon until day 16, by which time they had crashed it
+to $115. **Reading that replay was worth more than a day of local tuning** -- it
+contains the opponent's whole farm, turn by turn.
 
 **Leaderboard scores are a skill rating, not money.** Every submission seeds at 600.0
 and climbs as it plays ranked episodes; the top of the board was ~2,985 at submission
