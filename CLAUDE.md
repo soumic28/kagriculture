@@ -24,20 +24,43 @@ the end of a 720-turn season (30 days × 24 turns/day).
   by trusting the absence of errors.
 
 ## Current status
-- `main.py` (v1): single-crop wheat loop. Verified locally — beats `random`
-  (3026 mean over 5 episodes), loses to built-in `starter` (~3375 vs ~3495
-  full season). This is the floor, not the target.
+- `main.py` (v2): multi-unit task-assignment engine — territory dispatch, melon
+  allocation, hired crew, land expansion. **~62,000 mean vs `starter` ~3,500,
+  5/5 wins** over 5 full episodes. v1's wheat loop scored 3,371.
+- **Read `FINDINGS.md` before changing strategy.** It records source-verified
+  mechanics (the game docs are wrong in several places), the integrated price
+  curves, every measured result, and the open risks. Don't re-derive it.
+- Env is a project venv: use `./.venv/Scripts/python.exe`, not system Python.
 - Kaggle submissions: see `SUBMISSIONS.md` — update it every time you submit,
   don't rely on memory or Kaggle's UI as the source of truth across sessions.
 
+## What actually drives the score
+Melon. It is worth ~14x wheat per unit at fewer actions per tile-day, and neither
+built-in agent ever sells it, so town demand holds it near $250-290. Everything
+else is support: wheat funds the opening, land multiplies tiles, hands supply
+actions. Two counterintuitive, *measured* results:
+- **Geese lose money** (~$25/action vs melon's ~$150) and are off by default.
+- **Melon density has an optimum** near 33 tiles; more crashes its quadratic
+  glut curve, less leaves the market unexploited.
+
 ## Dev workflow
 ```bash
-python local_test.py --opponent starter --full                 # single smoke test
-python local_test.py --opponent starter --full --episodes 5    # real comparison (see gotcha below)
-python local_test.py --seed 42 --opponent starter               # reproducible debug run
-python local_test.py --render                                   # dumps replay.json if behavior looks wrong
-./submit.sh "commit message"                                     # regression-checks vs starter, then submits + reminds you to update SUBMISSIONS.md
+PY=./.venv/Scripts/python.exe
+
+$PY local_test.py --full --opponent starter --episodes 5   # the standard comparison
+$PY diagnose.py --opponent starter                          # per-day state + action histogram
+$PY sweep.py --episodes 3 KAG_MELON_DIV=2,3,4               # grid-search strategy dials
+$PY local_test.py --render                                  # dumps replay.json
+./submit.sh "note"                                          # regression-gates, then submits
 ```
+`diagnose.py` is the tool that finds problems — invalid actions are silent no-ops,
+so a healthy-looking score can still hide a broken subsystem. Watch the action
+histogram: movement above ~55% means dispatch is thrashing, and a HARVEST count far
+below PLANT means crops are dying unwatered.
+
+Strategy constants in `main.py` read `KAG_*` env vars (defaulting to tuned values)
+so `sweep.py` can explore them without editing the file.
+
 Multi-file agents: tar.gz with `main.py` at root (see AGENTS.md).
 
 **Gotcha (verified empirically, not documented anywhere):**
@@ -49,20 +72,23 @@ ever see identical scores across "different" episodes, this is why — check
 you're not accidentally relying on `num_episodes=N` directly somewhere.
 
 ## Roadmap (rough priority order)
-1. **Multi-crop diversification** — wheat alone caps income; add
-   carrot/tomato/melon and animals as land allows.
-2. **Land purchase timing** (NE/SW/SE @ $1k/$2k/$4k) — model payback period
-   per quadrant before buying, don't buy on autopilot.
-3. **Price-function-aware selling** — see README.md's Price Function table.
-   Premium goods (strawberry, melon, milk, wool) have `above_target > 1` and
-   crash to the $1 floor on modest gluts; stagger/batch sales. Wheat/carrot
-   absorb gluts better — fine to sell in bulk.
-4. **Animal husbandry** — the CARE+FEED banking mechanic rewards consistent
-   daily attention; a hand dedicated to animal upkeep may pay for itself.
-5. **Farm hand hiring economics** — Fibonacci hire cost resets daily; more
-   hands early in one day is cheaper than spreading hires across days.
-6. **Opponent modeling** — benchmark against `starter` and progressively
-   more aggressive strategies, not just `random`.
+1. **Contested-market robustness** — the biggest open risk. Self-play drops us
+   from ~62k to ~28k because both players crash melon. A real opponent doing
+   the same halves our return. Options: detect melon price collapse from
+   `market.prices` and rotate into egg/fertilizer (uncontested, gentle curves),
+   or sell melon earlier to win the race down the curve.
+2. **Routing** — movement is still ~52% of actions. Strips are assigned by
+   column index, not by walking cost; a better partition is free score.
+3. **Price-aware sell scheduling** — we currently dump the shed every turn.
+   Spreading melon sales across the day lets town consumption refill inventory
+   between batches.
+4. **Endgame liquidation** — verify nothing is stranded in unit inventories at
+   turn 720; unsold goods score zero.
+5. **Revisit geese with a ranch layout** — they lose today mostly on feed
+   logistics. Coops abutting the shed would cut the round-trip that killed them.
+
+Settled, don't redo: melon density (~33 tiles is optimal), geese as currently
+implemented (net negative), crew size (flat 12-20). See `FINDINGS.md`.
 
 ## Conventions
 - Keep `agent()` fast; push heavy precompute (e.g. price-curve tables) to

@@ -83,13 +83,64 @@ Cumulative revenue selling N units into a fresh market, alone:
 - **Hiring is drastically underpriced**: 10 hands = $143 for 240 extra actions
   ($0.60/action) against $13–45/action of value. Hire to the limit of *useful work*.
 
-## Baseline (measured, 5 full episodes)
+## Measured results (5 full episodes vs `starter` unless noted)
 
-```
-main.py (v1 wheat loop)  mean=3371.0  stdev=15.3
-starter                  mean=3505.2  stdev= 8.6
-win rate: 0/5
-```
+| Build | Mean | Note |
+|---|---|---|
+| v1 wheat loop (baseline) | 3,371 | loses to starter 0/5 |
+| v2 engine, global nearest-unit dispatch | 6,689 | 77% of actions were movement |
+| v2 + territory dispatch | 17,634 | strips cut thrash; 99/100 tiles planted |
+| v2 + melon allocation | 60,569 | **melon is the dominant lever** |
+| v2 + geese (unscoped logistics) | 21,660 | regression -- whole crew stampeded to shed |
+| v2 + geese (scoped to owning unit) | 49,703 | still worse than no geese |
+| **v2 tuned, geese off** | **~62,000** | 5/5 wins, `starter` ~3,500 |
 
-Episode runtime ~3.4s, so iteration is cheap. Variance is tiny (stdev ~15), so real
-improvements are unambiguous at 5 episodes.
+Episode runtime ~3.4s, so iteration is cheap. Variance is small (sd 100-1000 at the
+tuned config), so real improvements are unambiguous at 5 episodes.
+
+Agent latency: mean 0.14 ms/call, max 0.64 ms, against the 1000 ms `actTimeout`.
+Whole-episode agent time 0.10 s against the 1200 s `runTimeout`. Not a constraint.
+
+### Why geese lose
+
+Measured, not assumed. A melon tile returns roughly $150 per unit-action; a goose
+returns roughly $25. Animal chores (FEED / CARE / HARVEST / COLLECT_FERTILIZER plus
+the shed round-trip for feed) burned 998 actions -- 14.5% of the season -- and the
+$300/bird capital starved melon seed and land purchases exactly when they compound.
+Tile usage fell from ~99 to 42-74 and melon price barely moved, meaning the melon
+market was left unexploited.
+
+Swept `GOOSE_CAP` x `MELON_CAP`: geese lose at *every* melon level. They also lose
+under a contested melon market (31,070 with geese vs 44,785 without, head to head).
+The husbandry code is retained behind `KAG_GOOSE_CAP=0` because the trade could flip
+with cheaper feed logistics (a dedicated ranch abutting the shed was never tried).
+
+### Melon density is a real optimum
+
+`MELON_DIV` (tiles per melon plot) swept at fixed crew:
+
+| tiles/melon | melon tiles | mean |
+|---|---|---|
+| 2 | ~50 | 53,635 |
+| **3** | **~33** | **61,145** |
+| 4 | ~25 | 53,394 |
+
+Denser crashes the price past its quadratic glut curve; sparser leaves the market
+unexploited. Crew size (`HAND_CAP` 12 -> 20) moves the result under 1.5%, inside noise.
+
+## Open risks
+
+1. **The melon market is shared, and this strategy depends on it.** In self-play the
+   score falls from ~62,000 to ~28,000 as both players dump melon and crash the price.
+   Against `starter` we have the melon market to ourselves; a real leaderboard
+   opponent doing the same thing roughly halves the return. This is the single
+   biggest unknown going into ranked play.
+
+2. **The 30-day season length is hard-coded** (`SEASON_DAYS`). The observation exposes
+   `day`/`hour` but not `episodeSteps`, so the "don't plant what cannot mature" guard
+   assumes the documented 720-turn default. On a 200-turn episode the agent loses
+   (1,158 vs 3,072) because it commits tiles to melon that never ripen. Harmless at
+   the competition default; would need attention if the horizon ever changes.
+
+3. Movement is still ~52% of all actions. Further gains likely live in routing
+   (assigning strips by walking cost rather than by column index).
