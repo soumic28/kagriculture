@@ -4,10 +4,19 @@ Update this on every `kaggle competitions submit`. Keeps a paper trail across
 sessions so you (or a fresh Claude Code session) can see what's actually been
 tried, not just what's in the current working tree.
 
-| Date | Git commit | Description | Local test (vs starter, 5 eps) | Kaggle submission ID | Public LB score |
-|------|-----------|-------------|-------------------------------|----------------------|------------------|
-| 2026-08-05 | `a45bfac` | v2 engine + melon | 60,569 | _not submitted_ | — |
-| 2026-08-05 | _pending_ | v2 tuned, geese off | **61,541** (starter 3,504, 5/5) | _pending_ | _pending_ |
+| Date | Git commit | Description | Local (vs starter) | Self-play | Kaggle submission ID | Public LB |
+|------|-----------|-------------|--------------------|-----------|----------------------|-----------|
+| 2026-08-05 | `a45bfac` | v2 engine + melon | 60,569 | — | _not submitted_ | — |
+| 2026-08-05 | `e3f632f` | v2 tuned, geese off | 61,541 | — | _not submitted_ | — |
+| 2026-08-05 | `6806577` | v3 opponent-aware, h2h tuned | **60,601** | 27,617 | **55268942** | 600.0 (seeding) |
+
+**Leaderboard scores are a skill rating, not money.** Every submission seeds at 600.0
+and climbs as it plays ranked episodes; the top of the board was ~2,985 at submission
+time. Don't read the initial 600 as a failure -- re-check after it has played.
+
+**Limit: 5 submissions/day.** Standard Kaggle simulation policy is that only your
+latest 2 are tracked for final evaluation and only your best shows on the leaderboard,
+so a weak experiment can displace a good agent. Keep the melon build standing.
 
 Historical local scores for reference:
 
