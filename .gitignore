@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+replay.json
+replays/
+logs/
+kaggriculture-data/
+submission.tar.gz
+*.pkl
+.kaggle/
