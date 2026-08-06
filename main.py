@@ -102,8 +102,21 @@ PRODUCTS = (
 )
 
 MAX_ORDERS = 10
+# Fallbacks only. The real season length is read from the configuration the framework
+# passes as the agent's second argument -- hard-coding 30 days meant a shorter episode
+# was played with crops that could never ripen (a 360-step season scored 998).
 SEASON_DAYS = 30
 LAST_DAY = SEASON_DAYS - 1
+
+
+def _season_last_day(config):
+    """Final 0-indexed day of the season, from configuration where available."""
+    try:
+        steps = int(config["episodeSteps"])
+        per_day = max(1, int(config["turnsPerDay"]))
+        return max(0, (steps // per_day) - 1)
+    except Exception:
+        return LAST_DAY
 LAND_PRICES = (1000, 2000, 4000)
 
 # Job priorities. Watering inside the bonus window outranks harvesting so a plant
@@ -128,10 +141,16 @@ DROP_THRESHOLD = int(_env("KAG_DROP_THRESHOLD", 10))
 # for, and CARE banks a bonus paid out on the next scheduled production -- so a
 # fed-and-cared animal produces (1 + interval) units per cycle.
 LIVESTOCK = {
-    "GOOSE": {"cost": 300, "struct": "COOP",    "build": "BUILD_COOP",    "product": "EGG"},
-    "COW":   {"cost": 400, "struct": "PASTURE", "build": "BUILD_PASTURE", "product": "MILK"},
-    "SHEEP": {"cost": 500, "struct": "PASTURE", "build": "BUILD_PASTURE", "product": "WOOL"},
+    "GOOSE": {"cost": 300, "struct": "COOP",    "build": "BUILD_COOP",    "product": "EGG",  "first": 4},
+    "COW":   {"cost": 400, "struct": "PASTURE", "build": "BUILD_PASTURE", "product": "MILK", "first": 8},
+    "SHEEP": {"cost": 500, "struct": "PASTURE", "build": "BUILD_PASTURE", "product": "WOOL", "first": 6},
 }
+
+# Days of production a capital purchase needs before it repays itself. Used to stop
+# buying land or livestock that the remaining season cannot pay back -- on a short
+# episode the old fixed day-20/day-22 cutoffs happily bought both and lost money.
+LAND_PAYBACK_DAYS = 8
+ANIMAL_PAYBACK_DAYS = 5
 
 # Wheat kept in the shed as animal feed rather than sold.
 FEED_RESERVE_PER_ANIMAL = 2
@@ -245,7 +264,7 @@ def _step_toward(pos, target):
 
 
 
-def _melon_target(day, unlocked_tiles, money, melon_price, rival_melon):
+def _melon_target(day, unlocked_tiles, money, melon_price, rival_melon, last_day):
     """How many tiles should be carrying melon right now.
 
     Melon is worth roughly 14x wheat per unit and *fewer* actions per tile-day, but
@@ -256,7 +275,7 @@ def _melon_target(day, unlocked_tiles, money, melon_price, rival_melon):
     Day 0 is deliberately wheat-only: melon locks a tile for 11 days with no income,
     and the opening needs cash for land and crew.
     """
-    if day + CROPS["MELON"]["maxday"] > LAST_DAY:
+    if day + CROPS["MELON"]["maxday"] > last_day:
         return 0
     if melon_price < MELON_PRICE_MIN:
         return 0
@@ -285,7 +304,7 @@ def _melon_target(day, unlocked_tiles, money, melon_price, rival_melon):
     return max(0, target - int(rival_melon * MELON_RIVAL_SHARE))
 
 
-def _herd_target(day, money, have):
+def _herd_target(day, money, have, last_day):
     """Head count wanted per species right now, as {animal: n}.
 
     Livestock opens four markets crops cannot reach -- egg, milk, wool and the daily
@@ -296,34 +315,68 @@ def _herd_target(day, money, have):
     Never shrinks below what is already standing: an animal is a sunk $300-500 and
     keeps producing, so a temporary cash dip must not read as "sell the herd".
     """
-    if day > HERD_LAST_DAY or money < HERD_MIN_MONEY:
+    if money < HERD_MIN_MONEY:
         return dict(have)
     # No pens during the melon opening. Pens are allocated before crops, so a herd
     # plan of 23 head would claim 23 of the 25 opening tiles and leave nothing to
     # plant -- and the animals are unaffordable until the melon money lands anyway.
     if PHASED and day <= PHASE1_END:
         return dict(have)
-    return {a: max(HERD.get(a, 0), have.get(a, 0)) for a in LIVESTOCK}
+    # Only stock a species that still has time to produce: a cow needs 8 days to
+    # first milk, so buying one near the end is a pure loss.
+    out = {}
+    for a, spec in LIVESTOCK.items():
+        standing = have.get(a, 0)
+        ripe_in_time = day + spec["first"] + ANIMAL_PAYBACK_DAYS <= last_day
+        out[a] = max(HERD.get(a, 0), standing) if ripe_in_time else standing
+    return out
 
 
-def agent(obs):
-    player = obs["player"]
-    me = obs["farms"][player]
-    priv = obs["private"]
-    day = obs["day"]
-    hour = obs["hour"]
-    money = me["money"]
-    tiles = me["tiles"]
+def agent(obs, config=None):
+    """Entry point. Must never raise and must never be slow.
+
+    A thrown exception or a call over `actTimeout` forfeits the turn, and with 720
+    turns an episode is lost to a single bad observation. Everything below degrades to
+    a legal no-op rather than propagating, and the hand list is still sized correctly
+    so the fallback stays a valid action.
+    """
+    try:
+        return _decide(obs, config)
+    except Exception:
+        n_hands = 0
+        try:
+            n_hands = len(obs["farms"][obs["player"]].get("hands") or [])
+        except Exception:
+            pass
+        return {"farmer": ["PASS"], "hands": [["PASS"]] * n_hands, "market": []}
+
+
+def _decide(obs, config=None):
+    player = obs.get("player", 0)
+    farms = obs.get("farms") or []
+    if not farms or player >= len(farms):
+        return {"farmer": ["PASS"], "hands": [], "market": []}
+    me = farms[player]
+    priv = obs.get("private") or {}
+    last_day = _season_last_day(config)
+    day = obs.get("day", 0)
+    hour = obs.get("hour", 0)
+    money = me.get("money", 0)
+    tiles = me.get("tiles") or []
     n = len(tiles)
-    seeds = priv["seeds"]
-    shed = priv["shed"]
-    invs = priv["inventories"]
+    if n == 0:
+        return {"farmer": ["PASS"], "hands": [], "market": []}
+    seeds = priv.get("seeds") or {}
+    shed = priv.get("shed") or {}
+    invs = priv.get("inventories") or []
 
-    positions = [list(me["farmer"])] + [list(p) for p in me["hands"]]
+    # Board size is read from the observation rather than assumed, so a non-default
+    # boardSize still works: shed-access tiles and quadrants are derived from `n`.
+    positions = [list(me["farmer"])] + [list(p) for p in (me.get("hands") or [])]
     n_units = len(positions)
     acts = [["PASS"] for _ in range(n_units)]
 
-    prices = obs["market"]["prices"]
+    prices = (obs.get("market") or {}).get("prices") or {}
 
     # Both farms are public. Counting the rival's melon plots reveals a coming glut
     # around day 10 while there is still time to plant something else, instead of
@@ -420,11 +473,11 @@ def agent(obs):
     for crop, share in _crop_mix(day).items():
         c = CROPS[crop]
         # Nothing that cannot reach its first yield before the season ends.
-        if day + c["first"] > LAST_DAY:
+        if day + c["first"] > last_day:
             continue
         if crop == "MELON" and not PHASED:
             target = _melon_target(day, unlocked_tiles, money,
-                                   prices.get("MELON", 250), rival_melon)
+                                   prices.get("MELON", 250), rival_melon, last_day)
         else:
             target = int(unlocked_tiles * share)
         # A crop already at the $1 floor is worth less than bare dirt.
@@ -437,7 +490,7 @@ def agent(obs):
 
     # How many pens of each kind the herd plan needs beyond what already exists.
     # Geese need coops; cows and sheep share pastures.
-    want_herd = _herd_target(day, money, herd)
+    want_herd = _herd_target(day, money, herd, last_day)
     need_pen = {}
     for animal, n_want in want_herd.items():
         kind = LIVESTOCK[animal]["struct"]
@@ -520,11 +573,11 @@ def agent(obs):
     # Goods in the shed or in a unit's hands at the buzzer score nothing, and the
     # end-of-day drop never runs on the final day. So from here units run everything
     # back; past `closing` they stop picking up new work that could not be sold.
-    endgame = day >= LAST_DAY and hour >= 8
-    closing = day >= LAST_DAY and hour >= 14
+    endgame = day >= last_day and hour >= 8
+    closing = day >= last_day and hour >= 14
     if closing:
         jobs = [j for j in jobs if j[3][0] in ("HARVEST", "DIG")]
-    if day >= LAST_DAY and hour >= 20:
+    if day >= last_day and hour >= 20:
         jobs = []
 
     shed_wheat = shed.get("WHEAT", 0)
@@ -647,7 +700,7 @@ def agent(obs):
     # shed -- so hold a reserve back rather than selling the flock's dinner. On the
     # final day the herd has no future left to feed, and unsold wheat scores nothing,
     # so the reserve is released.
-    reserve = 0 if day >= LAST_DAY else animal_count * FEED_RESERVE_PER_ANIMAL
+    reserve = 0 if day >= last_day else animal_count * FEED_RESERVE_PER_ANIMAL
     sellable = []
     for item in PRODUCTS:
         held = shed.get(item, 0)
@@ -674,7 +727,9 @@ def agent(obs):
         # worse than seed: an extra quadrant sits idle until the harvest pays, whereas
         # $1,000 is twelve more melon plants that all mature on day 10. Buy after the
         # melon money lands, not before.
-        if money >= cost + 400 and day <= 22 and (not PHASED or day > PHASE1_END):
+        if (money >= cost + 400
+                and day + LAND_PAYBACK_DAYS <= last_day
+                and (not PHASED or day > PHASE1_END)):
             market.append(["BUY_LAND"])
 
     # Buy exactly what the tile plan calls for. Melon goes first -- it is the scarce,
@@ -707,7 +762,7 @@ def agent(obs):
     #
     # Pens are counted per structure kind, but cows and sheep share pastures -- so
     # only buy up to this species' own shortfall, or one species would take every pen.
-    if day <= HERD_LAST_DAY:
+    if True:
         pen_budget = {k: len(v) for k, v in pens_free.items()}
         for animal in sorted(LIVESTOCK, key=lambda a: LIVESTOCK[a]["cost"]):
             if len(market) >= MAX_ORDERS - 1:
