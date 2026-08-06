@@ -91,10 +91,34 @@ PHASE2_MIX = {
 PHASED = int(_env("KAG_PHASED", 0))
 
 
-def _crop_mix(day):
-    if not PHASED:
-        return CROP_MIX
-    return PHASE1_MIX if day <= PHASE1_END else PHASE2_MIX
+# Base sale price per crop, used to read how far a market has moved from its start.
+CROP_BASE = {"WHEAT": 25, "CARROT": 35, "TOMATO": 60, "STRAWBERRY": 120, "MELON": 250}
+
+# How hard to tilt the tile allocation toward crops whose price has risen. 0 keeps the
+# fixed shares; 1 makes a crop trading at twice its base price get twice the tiles.
+#
+# This is what lets the farm follow the market instead of a plan. Wheat climbs to
+# ~$55 late (38/day of town demand and almost nobody grows it) while melon and
+# strawberry crash as both farms dump -- the strongest ranked agent converts a third
+# of its tiles to wheat over days 22-28 for exactly this reason.
+PRICE_ALPHA = float(_env("KAG_PRICE_ALPHA", 0.0))
+
+
+def _crop_mix(day, prices=None):
+    base = CROP_MIX
+    if PHASED:
+        base = PHASE1_MIX if day <= PHASE1_END else PHASE2_MIX
+    if not PRICE_ALPHA or not prices:
+        return base
+    # Weight each share by how far its price sits above or below base, then renormalise
+    # so the total tile demand is unchanged.
+    tilted = {}
+    for crop, share in base.items():
+        ratio = prices.get(crop, CROP_BASE.get(crop, 1)) / float(CROP_BASE.get(crop, 1))
+        tilted[crop] = share * (max(0.05, ratio) ** PRICE_ALPHA)
+    total = sum(tilted.values()) or 1.0
+    scale = sum(base.values()) / total
+    return {c: v * scale for c, v in tilted.items()}
 
 PRODUCTS = (
     "WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON",
@@ -122,6 +146,24 @@ LAND_PRICES = (1000, 2000, 4000)
 # Job priorities. Watering inside the bonus window outranks harvesting so a plant
 # collects its final unit before being pulled. Distance dominates dispatch, so these
 # mostly act as tie-breaks within a unit's own strip.
+# Jobs at or above this are *urgent*: skipping one today causes permanent loss, not
+# just a smaller harvest. An animal dies after two consecutive unfed days ($400-500
+# gone) and a plant becomes a weed after two unwatered days. Dispatch normally lets
+# distance dominate, which meant a nearby watering job outranked a distant feed and
+# over half the herd starved between day 16 and day 22.
+P_URGENT = 20
+# 1 lets life-or-death jobs outrank distance; 0 keeps pure distance-first dispatch.
+URGENCY = int(_env("KAG_URGENCY", 0))
+# 1 counts animals walking to their pen against the herd target; 0 ignores them.
+# 0 by default, and it is not an oversight: not counting them over-buys slightly,
+# and that surplus is a buffer against the animals still lost to missed feeds.
+# Measured 5/8 ahead of the 'correct' accounting.
+COUNT_CARRIED = int(_env("KAG_COUNT_CARRIED", 0))
+# Buy wheat from the market to keep the feed store stocked.
+BUY_FEED = int(_env("KAG_BUY_FEED", 1))
+P_FEED_URGENT = 21
+P_WATER_URGENT = 20
+
 P_FEED = 9
 P_WATER_BONUS = 9
 P_HARVEST = 8
@@ -439,7 +481,7 @@ def _decide(obs, config=None):
                 elif ripe:
                     jobs.append((P_HARVEST, x, y, ["HARVEST"]))
                 elif not watered and t["consecutive_unwatered"] >= 1:
-                    jobs.append((P_WATER_SURVIVE, x, y, ["WATER"]))
+                    jobs.append((P_WATER_URGENT if URGENCY else P_WATER_SURVIVE, x, y, ["WATER"]))
             elif kind in ("COOP", "PASTURE"):
                 structures[kind] = structures.get(kind, 0) + 1
                 if "animal" not in t:
@@ -455,7 +497,8 @@ def _decide(obs, config=None):
                 )
                 if hungry:
                     unfed.add((x, y))
-                    jobs.append((P_FEED, x, y, ["FEED"]))
+                    starving = t["consecutive_unfed"] >= 1
+                    jobs.append((P_FEED_URGENT if (URGENCY and starving) else P_FEED, x, y, ["FEED"]))
                 if t["yield_units"] > 0:
                     jobs.append((P_HARVEST, x, y, ["HARVEST"]))
                 if t["fertilizer_available"]:
@@ -470,7 +513,7 @@ def _decide(obs, config=None):
     # ordered by how badly they are under quota so no single crop monopolises a burst
     # of free tiles.
     deficits = []
-    for crop, share in _crop_mix(day).items():
+    for crop, share in _crop_mix(day, prices).items():
         c = CROPS[crop]
         # Nothing that cannot reach its first yield before the season ends.
         if day + c["first"] > last_day:
@@ -673,7 +716,8 @@ def _decide(obs, config=None):
                 # would walk over and silently no-op.
                 if job[3][0] == "FEED" and not has_wheat:
                     continue
-                key = (abs(px - job[1]) + abs(py - job[2]), -job[0])
+                key = (0 if (URGENCY and job[0] >= P_URGENT) else 1,
+                       abs(px - job[1]) + abs(py - job[2]), -job[0])
                 if best_key is None or key < best_key:
                     best, best_key = job, key
             if best is not None:
@@ -682,7 +726,11 @@ def _decide(obs, config=None):
             continue
         taken.add((best[1], best[2]))
         assigned[i] = True
-        acts[i] = best[3] if best_key[0] == 0 else _step_toward(positions[i], (best[1], best[2]))
+        # best_key is (urgent_flag, distance, -priority) -- distance is element 1.
+        # Reading element 0 here silently turned every non-urgent job into an endless
+        # walk and fired urgent ones as no-ops from across the farm.
+        on_tile = best_key[1] == 0
+        acts[i] = best[3] if on_tile else _step_toward(positions[i], (best[1], best[2]))
 
     # ---------------------------------------------------------------- market
     market = []
@@ -756,6 +804,18 @@ def _decide(obs, config=None):
             if buy > 0:
                 market.append(["BUY_SEED", crop, buy])
 
+    # Top the feed store up from the market rather than relying on our own wheat.
+    # An animal is $400-500 plus its daily production; wheat is $25-55, so buying
+    # insurance against a missed feed is cheap. BUY_PRODUCT lands in the shed and
+    # silently fails when the shed is full, which is why produce is sold every turn.
+    if BUY_FEED and animal_count and len(market) < MAX_ORDERS - 1:
+        short_feed = animal_count * FEED_RESERVE_PER_ANIMAL - shed.get("WHEAT", 0)
+        if short_feed > 0 and money > 800:
+            price = max(1, prices.get("WHEAT", 25))
+            buy = min(short_feed, int((money - 800) // price))
+            if buy > 0:
+                market.append(["BUY_PRODUCT", "WHEAT", buy])
+
     # Stock each empty pen, cheapest species first so a goose is never blocked behind
     # an unaffordable cow. BUY_ANIMAL lands in the shed and silently fails when the
     # shed is at capacity, which is why produce is sold off every turn.
@@ -768,7 +828,12 @@ def _decide(obs, config=None):
             if len(market) >= MAX_ORDERS - 1:
                 break
             kind = LIVESTOCK[animal]["struct"]
-            short = want_herd.get(animal, 0) - herd.get(animal, 0) - shed.get(animal, 0)
+            # Count animals already in transit in a unit's hands as well as those
+            # standing and those in the shed, or we keep re-buying stock that is
+            # simply walking to its pen (17 head bought against a target of 14).
+            carried_n = sum((iv or {}).get(animal, 0) for iv in invs) if COUNT_CARRIED else 0
+            short = (want_herd.get(animal, 0) - herd.get(animal, 0)
+                     - shed.get(animal, 0) - carried_n)
             room = min(short, pen_budget.get(kind, 0))
             if room <= 0:
                 continue
