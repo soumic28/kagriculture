@@ -56,6 +56,46 @@ CROP_MIX = {
     "STRAWBERRY": float(_env("KAG_MIX_STRAWBERRY", 0.14)),
 }
 
+# Sustainable demand, in units the town removes from the market per day once all
+# shops are open (shops take 1 per 4 turns each, single-product shops double; the
+# town centre takes 1 per 12 turns, x4 after day 20):
+#
+#   MILK 26/day x $160 = $4,160     STRAWBERRY 32/day x $120 = $3,840
+#   WOOL 20/day x $200 = $4,000     MELON       8/day x $250 = $2,000
+#   TOMATO 20 x $60 = $1,200        EGG 20 x $50 = $1,000
+#   WHEAT 38 x $25 = $950           CARROT 26 x $35 = $910    FERTILIZER 0
+#
+# Because the town drains faster than either player sells, these markets *inflate*:
+# in a ranked episode strawberry ran 120 -> 256, milk 160 -> 303, wool 200 -> 245 by
+# day 22. Melon is the opposite -- no shop demands it, so it only ever falls.
+#
+# Hence two phases, copied from the strongest farm observed (199,688):
+#   phase 1, to day ~11: melon only. It is the one crop that pays before day 10, and
+#            its whole value is the opening race.
+#   phase 2, after the melon harvest: strawberry plus cattle and sheep, i.e. the three
+#            highest sustainable-demand goods, sold into a rising market.
+PHASE1_END = int(_env("KAG_PHASE1_END", 11))
+PHASE1_MIX = {"MELON": float(_env("KAG_P1_MELON", 0.90))}
+PHASE2_MIX = {
+    "STRAWBERRY": float(_env("KAG_P2_STRAWBERRY", 0.70)),
+    "MELON":      float(_env("KAG_P2_MELON", 0.10)),
+    "CARROT":     float(_env("KAG_P2_CARROT", 0.10)),
+    "WHEAT":      float(_env("KAG_P2_WHEAT", 0.08)),
+    "TOMATO":     float(_env("KAG_P2_TOMATO", 0.02)),
+}
+# Off by default. The phased plan mirrors the strongest farm observed (199,688) and
+# executes correctly -- 22 melon tiles, harvest day 10 for ~$22k, then convert -- but
+# it loses 2/6 head-to-head against the diversified build and collapses to ~11,000 in
+# self-play: when both farms open all-in on melon they crash it together and neither
+# can fund the second phase. It only pays against a field that leaves melon alone.
+PHASED = int(_env("KAG_PHASED", 0))
+
+
+def _crop_mix(day):
+    if not PHASED:
+        return CROP_MIX
+    return PHASE1_MIX if day <= PHASE1_END else PHASE2_MIX
+
 PRODUCTS = (
     "WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON",
     "EGG", "MILK", "WOOL", "FERTILIZER",
@@ -151,8 +191,16 @@ MELON_RIVAL_SHARE = float(_env("KAG_MELON_RIVAL_SHARE", 0.0))
 # and goose-light, which independently matches the profile of the strongest agent seen
 # in ranked replays (COW:10 SHEEP:8 GOOSE:4). Geese are the cheapest head but eat a
 # feed run each; cows yield 3 milk per 2 days once cared for.
+# Milk and wool are the two best sustainable markets ($4,160 and $4,000/day of town
+# demand), so cattle and sheep are the engine, not a side bet. Geese are dropped by
+# default: egg is only $1,000/day of demand and each bird still costs a feed run.
+# The strongest ranked farm observed ran COW:13 SHEEP:10 and no geese at all.
+# Swept: 0/8/6 scored 98,977 against 77,852 for 0/8/10. Geese lose at every setting
+# tested -- egg is only ~$1,000/day of town demand against milk's $4,160 and wool's
+# $4,000, and each bird still costs a daily feed run. Bigger herds lose too: past
+# ~14 head the feed round-trips and the $400-500 apiece crowd out the crops.
 HERD = {
-    "GOOSE": int(_env("KAG_N_GOOSE", 4)),
+    "GOOSE": int(_env("KAG_N_GOOSE", 0)),
     "COW":   int(_env("KAG_N_COW", 8)),
     "SHEEP": int(_env("KAG_N_SHEEP", 6)),
 }
@@ -249,6 +297,11 @@ def _herd_target(day, money, have):
     keeps producing, so a temporary cash dip must not read as "sell the herd".
     """
     if day > HERD_LAST_DAY or money < HERD_MIN_MONEY:
+        return dict(have)
+    # No pens during the melon opening. Pens are allocated before crops, so a herd
+    # plan of 23 head would claim 23 of the 25 opening tiles and leave nothing to
+    # plant -- and the animals are unaffordable until the melon money lands anyway.
+    if PHASED and day <= PHASE1_END:
         return dict(have)
     return {a: max(HERD.get(a, 0), have.get(a, 0)) for a in LIVESTOCK}
 
@@ -364,19 +417,19 @@ def agent(obs):
     # ordered by how badly they are under quota so no single crop monopolises a burst
     # of free tiles.
     deficits = []
-    for crop, share in CROP_MIX.items():
+    for crop, share in _crop_mix(day).items():
         c = CROPS[crop]
         # Nothing that cannot reach its first yield before the season ends.
         if day + c["first"] > LAST_DAY:
             continue
-        if crop == "MELON":
+        if crop == "MELON" and not PHASED:
             target = _melon_target(day, unlocked_tiles, money,
                                    prices.get("MELON", 250), rival_melon)
         else:
             target = int(unlocked_tiles * share)
-            # A crop already at the $1 floor is worth less than bare dirt.
-            if prices.get(crop, 99) <= 2:
-                target = 0
+        # A crop already at the $1 floor is worth less than bare dirt.
+        if prices.get(crop, 99) <= 2:
+            target = 0
         gap = target - grown.get(crop, 0)
         if gap > 0:
             deficits.append((gap, crop))
@@ -581,25 +634,47 @@ def agent(obs):
     # ---------------------------------------------------------------- market
     market = []
 
-    # Sell first: money booked here is available to HIRE / BUY_LAND orders later in
-    # the same queue, since orders resolve in list order.
+    # Only 10 market orders clear per turn and the rest are silently dropped, so slots
+    # are a real budget. A HIRE buys 24 unit-actions for a few dollars -- far and away
+    # the best value per slot -- but sell orders are one *per product*, and after the
+    # end-of-day drop nine products can hold stock and swallow the entire queue,
+    # leaving nothing for hiring. So reserve the morning's hiring slots up front.
+    target_hands = max(2, min(HAND_CAP, unlocked_tiles // HAND_DIV))
+    hire_need = max(0, target_hands - me["hires_today"]) if hour <= 3 else 0
+    sell_budget = max(2, MAX_ORDERS - min(hire_need, 6) - 2)
+
     # Wheat is the one product that is also a consumable -- animals eat it out of the
     # shed -- so hold a reserve back rather than selling the flock's dinner. On the
     # final day the herd has no future left to feed, and unsold wheat scores nothing,
     # so the reserve is released.
     reserve = 0 if day >= LAST_DAY else animal_count * FEED_RESERVE_PER_ANIMAL
+    sellable = []
     for item in PRODUCTS:
         held = shed.get(item, 0)
         if item == "WHEAT":
             held -= reserve
         if held > 0:
-            market.append(["SELL", item, held])
+            sellable.append((held * prices.get(item, 1), item, held))
+    # Highest-value stock first, so a capped queue still books the money that matters.
+    sellable.sort(reverse=True)
+    for _value, item, held in sellable[:sell_budget]:
+        market.append(["SELL", item, held])
+
+    # Hire before the remaining buys: the hands work all day, whereas a seed bought a
+    # turn later costs almost nothing.
+    for _ in range(hire_need):
+        if len(market) >= MAX_ORDERS:
+            break
+        market.append(["HIRE"])
 
     n_extra = len(me["unlocked_quadrants"]) - 1
     if n_extra < len(LAND_PRICES):
         cost = LAND_PRICES[n_extra]
-        # Land needs time to earn back: ~25 tiles at roughly $15/tile/day.
-        if money >= cost + 400 and day <= 22:
+        # Land needs time to earn back, but during the melon opening it is strictly
+        # worse than seed: an extra quadrant sits idle until the harvest pays, whereas
+        # $1,000 is twelve more melon plants that all mature on day 10. Buy after the
+        # melon money lands, not before.
+        if money >= cost + 400 and day <= 22 and (not PHASED or day > PHASE1_END):
             market.append(["BUY_LAND"])
 
     # Buy exactly what the tile plan calls for. Melon goes first -- it is the scarce,
@@ -648,12 +723,12 @@ def agent(obs):
                 market.append(["BUY_ANIMAL", animal, buy])
                 pen_budget[kind] -= buy
 
-    # Hiring is wildly underpriced (fib costs: 10 hands = $143 for 240 extra actions).
-    # Scale the crew to the amount of workable land.
-    target_hands = max(2, min(HAND_CAP, unlocked_tiles // HAND_DIV))
-    if hour <= 3 and me["hires_today"] < target_hands:
-        room = MAX_ORDERS - len(market)
-        for _ in range(min(target_hands - me["hires_today"], max(0, room))):
+    # Any hires that did not fit the reserved slots above can use whatever is left.
+    if hour <= 3:
+        placed = sum(1 for o in market if o[0] == "HIRE")
+        for _ in range(max(0, hire_need - placed)):
+            if len(market) >= MAX_ORDERS:
+                break
             market.append(["HIRE"])
 
     return {
