@@ -5,6 +5,38 @@ Verified by reading the installed env source
 Where this contradicts `README.md`/`AGENTS.md`, **this file wins** — the docs are
 wrong in several places.
 
+## CORRECTION: sustainable demand, not dump ceilings
+
+**The revenue-ceiling table further down this file is misleading, and building on it
+cost us a day.** It costs each product as a single dump against its glut curve. But
+town shops drain market inventory *continuously*, so price recovers, and what governs
+income is the **sustainable rate** — how fast the town removes stock.
+
+Shops consume 1 unit per demanded product every 4 turns (6/day); single-product shops
+double it. The town centre takes 1 of every non-fertilizer product every 12 turns,
+doubling after day 10 and quadrupling after day 20 (so 8/day late).
+
+| Product | Town demand | Base | Sustainable $/day |
+|---|---|---|---|
+| **Milk** | 26/day | $160 | **$4,160** |
+| **Wool** | 20/day | $200 | **$4,000** |
+| **Strawberry** | 32/day | $120 | **$3,840** |
+| Melon | 8/day | $250 | $2,000 |
+| Tomato | 20/day | $60 | $1,200 |
+| Egg | 20/day | $50 | $1,000 |
+| Wheat | 38/day | $25 | $950 |
+| Carrot | 26/day | $35 | $910 |
+| **Fertilizer** | **0/day** | $100 | **$0** |
+
+Because the town drains faster than either player sells, these markets **inflate**. In
+ranked episode 90318832 strawberry ran 120 → 256, milk 160 → 303 and wool 200 → 245
+by day 22. Melon and fertilizer are the exceptions — no shop demands either, so they
+only ever fall. **Those were the two products this agent was originally built around.**
+
+The strongest farm observed (199,688) followed the implication exactly: 22 melon tiles
+to day 11, dump for ~$22k, then STRAWBERRY:71 COW:13 SHEEP:10 sold into a rising
+market. That plan is implemented behind `KAG_PHASED` but is **off** — see below.
+
 ## Doc errors
 
 | Doc claim | Actual (source) |
@@ -183,6 +215,39 @@ their strategy was beatable, not optimal.
 melon, so vs-starter runs reward patient farm-building: the opening push costs ~4%
 there (60,601 -> 56,200) while gaining ~40% contested. Rating comes from head-to-head
 wins. Decide strategy with `h2h.py`.
+
+## Why the phased plan is off
+
+`KAG_PHASED=1` reproduces the 199,688 farm and executes correctly (22 melon tiles,
+harvest day 10 for ~$22k, then convert). It still loses:
+
+- 2/6 head-to-head against the diversified build
+- self-play collapses to ~11,000 — when **both** farms open all-in on melon they crash
+  it together and neither can fund phase two
+
+It is the right play only against a field that leaves melon alone. Ours does not.
+
+Two real bugs were found building it, both fixed: land was bought on **day 0**,
+starving the opening seed budget, and the herd plan claimed **23 of the 25 opening
+tiles as pens** before any crop was allocated.
+
+## Herd and mix, retuned on sustainable demand
+
+| Setting | Result |
+|---|---|
+| 0 geese / 8 cows / 6 sheep | **98,977** |
+| 0 geese / 8 cows / 10 sheep | 77,852 |
+| 4 geese (any other setting) | consistently worse |
+| Strawberry-heavy mix (0.28) | 72,450 vs 83,108 for the existing mix |
+
+Geese are gone: egg is the weakest animal market and each bird still costs a daily
+feed run. Bigger herds lose to **feed round-trips, not to the price curve** — which is
+also why the strawberry-heavy mix underperforms despite strawberry's strong demand.
+Strawberry occupies a tile for 17 days, and watering throughput is the binding limit.
+
+**Actions, not tiles, are the constraint.** Movement is ~52% of all actions and PASS
+another 9%. Until routing improves, extra livestock and long-cycle crops cannot be
+serviced, which is the single biggest thing standing between us and the 100k+ farms.
 
 ## Open risks
 
