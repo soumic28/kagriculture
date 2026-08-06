@@ -249,6 +249,37 @@ Strawberry occupies a tile for 17 days, and watering throughput is the binding l
 another 9%. Until routing improves, extra livestock and long-cycle crops cannot be
 serviced, which is the single biggest thing standing between us and the 100k+ farms.
 
+## The elite build (episode 90338757, Ben Hamilton 115,481 v Winter Lamb 109,426)
+
+Two top-3 agents playing each other. They converge on almost the same farm, steady
+from day 14: **strawberry 40, melon 12-13, cow 8, sheep 6, wheat 3-7, no carrot, no
+tomato**. Our herd (8 cows / 6 sheep) already matches; our crop split does not.
+
+They also buy **livestock on day 2**, spending nearly the whole opening bank, and Ben
+**pivots into wheat late** (7 → 19 → 31 → 38 tiles over days 22-28) once strawberry
+cannot fit another cycle and wheat has climbed to $52-55.
+
+Prices in that game:
+
+| Product | Behaviour |
+|---|---|
+| **Milk** | never crashes — $190-220 all season, 26/day demand absorbs 8 cows |
+| **Wheat** | **rises 25 → $55** — 38/day demand, almost nobody grows it |
+| Wool | collapses 222 → 11 by day 20 with 6 sheep on both sides |
+| Strawberry | rises to 212, then crashes to 3 as both farms dump late |
+| Melon | falls all game — no shop demands it |
+
+**Copying their configuration makes us worse**, measured:
+
+| Change toward the elite build | Result |
+|---|---|
+| Their crop mix (STRAW 0.55, no carrot/tomato) | **loses 1/6 h2h**; 74,875 vs starter |
+| Earlier livestock (`HERD_MIN_MONEY` 1200→600→250) | 97,867 → 83,660 → 78,064 |
+
+Every dial is at a local optimum. The gap is **execution, not allocation** — they can
+service 40 strawberry tiles and day-2 livestock, and our engine starves when asked to.
+See `PLAN.md`.
+
 ## Open risks
 
 1. **The melon market is shared, and this strategy depends on it.** In self-play the
