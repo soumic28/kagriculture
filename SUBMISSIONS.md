@@ -13,7 +13,8 @@ tried, not just what's in the current working tree.
 | 2026-08-05 | `d746c8f` | v5 diversified mix + 4 geese | 67,515 | 41,151 | 55269657 | 584.3 |
 | 2026-08-05 | `c1c2d48` | v6 full livestock | 70,355 | 49,019 | 55270133 | 604.5 (12W-13L) |
 | 2026-08-06 | `6fcfb42` | v7 sustainable-demand retune, no geese | 98,019 | 68,752 | 55287828 | _pending_ |
-| 2026-08-06 | `HEAD` | **v8 reads config, horizon-aware, crash-proof** | **102,067** | **67,691** | **55288xxx** | _pending_ |
+| 2026-08-06 | `543d78b` | v8 reads config, horizon-aware, crash-proof | 102,067 | 67,691 | 55288320 | _pending_ |
+| 2026-08-06 | `HEAD` | **v9 buy feed wheat (herd stops starving)** | **126,185** | **83,205** | **55289xxx** | _pending_ |
 
 
 v4 scores *lower* than v3 against `starter` on purpose. It beats v3 **4/4 head-to-head**

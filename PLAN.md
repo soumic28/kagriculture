@@ -67,6 +67,19 @@ productive work      39%
 Six of every ten actions do nothing. Adding tiles or animals makes it worse, which is
 exactly why every "more of the good thing" experiment regressed.
 
+## Done since this plan was written
+
+**The bottleneck was not movement.** Tracing revenue by product found milk earning
+$332/unit but only 79 units sold against ~264 potential, and wool earning nothing at
+all. The herd was starving -- COW:10 SHEEP:7 at day 16 down to COW:5 SHEEP:4 by day 22
+-- because we only fed from wheat we grew. Buying feed wheat from the market fixed it:
+beats v8 8/8, self-play 67,691 -> 83,205.
+
+Priority 1 below (cut movement waste) was **measured and rejected**: 52% movement is
+close to the floor for this board, and every attempt to reduce it (fewer/denser tiles,
+larger crews, smaller crews) lost. Priority 2 (late wheat pivot, via price-adaptive
+allocation) measured dead even at 4/8. Both dials remain in the code, defaulted off.
+
 ## Priorities
 
 ### 1. Cut movement waste — the only change that unlocks everything else
