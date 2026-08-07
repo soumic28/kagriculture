@@ -74,21 +74,32 @@ CROP_MIX = {
 #            its whole value is the opening race.
 #   phase 2, after the melon harvest: strawberry plus cattle and sheep, i.e. the three
 #            highest sustainable-demand goods, sold into a rising market.
-PHASE1_END = int(_env("KAG_PHASE1_END", 11))
-PHASE1_MIX = {"MELON": float(_env("KAG_P1_MELON", 0.90))}
-PHASE2_MIX = {
-    "STRAWBERRY": float(_env("KAG_P2_STRAWBERRY", 0.70)),
-    "MELON":      float(_env("KAG_P2_MELON", 0.10)),
-    "CARROT":     float(_env("KAG_P2_CARROT", 0.10)),
-    "WHEAT":      float(_env("KAG_P2_WHEAT", 0.08)),
-    "TOMATO":     float(_env("KAG_P2_TOMATO", 0.02)),
+PHASE1_END = int(_env("KAG_PHASE1_END", 7))
+# Opening: melon and wheat only -- both cheap and fast, and melon is the one crop
+# that pays before day 10. On 25 tiles this is 12 melon and 7 wheat, matching every
+# top farm observed. Strawberry seed is $100 and yields nothing until day 10, so
+# sowing it now simply empties the bank (we measured $10 left on day 0, plants dying
+# by day 8, and no cows all season).
+PHASE1_MIX = {
+    "MELON": float(_env("KAG_P1_MELON", 0.48)),
+    "WHEAT": float(_env("KAG_P1_WHEAT", 0.28)),
 }
-# Off by default. The phased plan mirrors the strongest farm observed (199,688) and
-# executes correctly -- 22 melon tiles, harvest day 10 for ~$22k, then convert -- but
-# it loses 2/6 head-to-head against the diversified build and collapses to ~11,000 in
-# self-play: when both farms open all-in on melon they crash it together and neither
-# can fund the second phase. It only pays against a field that leaves melon alone.
-PHASED = int(_env("KAG_PHASED", 0))
+# From day 8, funded by the melon harvest: strawberry becomes the bulk of the farm,
+# with melon and wheat held at the counts the top agents keep.
+PHASE2_MIX = {
+    "STRAWBERRY": float(_env("KAG_P2_STRAWBERRY", 0.42)),
+    "MELON":      float(_env("KAG_P2_MELON", 0.12)),
+    "WHEAT":      float(_env("KAG_P2_WHEAT", 0.07)),
+    "CARROT":     float(_env("KAG_P2_CARROT", 0.0)),
+    "TOMATO":     float(_env("KAG_P2_TOMATO", 0.0)),
+}
+# ON by default. An earlier all-in-melon version of this idea lost, but that was the
+# wrong opening, not the wrong idea: sequencing is what the top farms actually do.
+# Melon and wheat fund days 0-7, then the melon harvest pays for the strawberry block
+# and the full herd. Sowing strawberry from day 0 instead empties the bank ($10 left
+# on day 0, plants dying by day 8, no cows all season) -- the mix was never the
+# problem, the order was. Measured 10/10 head-to-head, 113,907 against 88,789.
+PHASED = int(_env("KAG_PHASED", 1))
 
 
 # Base sale price per crop, used to read how far a market has moved from its start.
@@ -380,7 +391,11 @@ def _herd_target(day, money, have, last_day):
     # plan of 23 head would claim 23 of the 25 opening tiles and leave nothing to
     # plant -- and the animals are unaffordable until the melon money lands anyway.
     if PHASED and day <= PHASE1_END:
-        return dict(have)
+        # A seed herd only. The top farms run 2 cows and 2 sheep from day 2, which
+        # starts milk on day 10, but a full herd here would take the pens and the cash
+        # that the opening melon needs.
+        seed_herd = {"GOOSE": 0, "COW": 2, "SHEEP": 2}
+        return {a: max(seed_herd.get(a, 0), have.get(a, 0)) for a in LIVESTOCK}
     # Only stock a species that still has time to produce: a cow needs 8 days to
     # first milk, so buying one near the end is a pure loss.
     out = {}
