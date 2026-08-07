@@ -165,6 +165,15 @@ BUY_FEED = int(_env("KAG_BUY_FEED", 1))
 # and livestock exactly when the herd is scaling, and the elite farms sit on
 # ~$14k at day 12 while we were hitting $0.
 CASH_FLOOR = int(_env("KAG_CASH_FLOOR", 300))
+
+# Base price of every sellable product, used to tell a depressed market from a
+# healthy one.
+PRODUCT_BASE = {"WHEAT": 25, "CARROT": 35, "TOMATO": 60, "STRAWBERRY": 120,
+                "MELON": 250, "EGG": 50, "MILK": 160, "WOOL": 200, "FERTILIZER": 100}
+# Hold stock back while its price is under this fraction of base. The town keeps
+# draining inventory every turn, so a crashed market recovers on its own -- dumping
+# into the floor converts goods to almost nothing. 0 disables the hold.
+SELL_MIN_RATIO = float(_env("KAG_SELL_MIN_RATIO", 0.0))
 P_FEED_URGENT = 21
 P_WATER_URGENT = 20
 
@@ -760,13 +769,23 @@ def _decide(obs, config=None):
     # final day the herd has no future left to feed, and unsold wheat scores nothing,
     # so the reserve is released.
     reserve = 0 if day >= last_day else animal_count * FEED_RESERVE_PER_ANIMAL
+    # Room left in the shed. Once it is tight, hold-backs stop: overflow at the
+    # end-of-day drop is discarded outright, which is worse than a poor price.
+    shed_used = sum(v for v in shed.values() if v > 0)
+    tight = shed_used > 70 or day >= last_day - 1
+
     sellable = []
     for item in PRODUCTS:
         held = shed.get(item, 0)
         if item == "WHEAT":
             held -= reserve
-        if held > 0:
-            sellable.append((held * prices.get(item, 1), item, held))
+        if held <= 0:
+            continue
+        price = prices.get(item, 1)
+        if (SELL_MIN_RATIO and not tight
+                and price < SELL_MIN_RATIO * PRODUCT_BASE.get(item, price)):
+            continue      # depressed; let town demand pull the price back up
+        sellable.append((held * price, item, held))
     # Highest-value stock first, so a capped queue still books the money that matters.
     sellable.sort(reverse=True)
     for _value, item, held in sellable[:sell_budget]:
