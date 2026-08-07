@@ -33,8 +33,8 @@ CROPS = {
     "WHEAT":      {"seed": 10,  "first": 2,  "maxday": 4,  "maxyield": 6, "ongoing": False},
     "CARROT":     {"seed": 20,  "first": 2,  "maxday": 3,  "maxyield": 4, "ongoing": False},
     "MELON":      {"seed": 80,  "first": 10, "maxday": 12, "maxyield": 6, "ongoing": False},
-    "TOMATO":     {"seed": 50,  "first": 8,  "maxday": 8,  "maxyield": 4, "ongoing": True},
-    "STRAWBERRY": {"seed": 100, "first": 10, "maxday": 10, "maxyield": 4, "ongoing": True},
+    "TOMATO":     {"seed": 50,  "first": 8,  "maxday": 8,  "maxyield": 4, "ongoing": True, "interval": 1},
+    "STRAWBERRY": {"seed": 100, "first": 10, "maxday": 10, "maxyield": 4, "ongoing": True, "interval": 2},
 }
 
 # Target share of workable tiles per crop.
@@ -161,6 +161,10 @@ URGENCY = int(_env("KAG_URGENCY", 0))
 COUNT_CARRIED = int(_env("KAG_COUNT_CARRIED", 0))
 # Buy wheat from the market to keep the feed store stocked.
 BUY_FEED = int(_env("KAG_BUY_FEED", 1))
+# Cash never spent on seed. Running the bank to zero mid-season blocks feed buying
+# and livestock exactly when the herd is scaling, and the elite farms sit on
+# ~$14k at day 12 while we were hitting $0.
+CASH_FLOOR = int(_env("KAG_CASH_FLOOR", 300))
 P_FEED_URGENT = 21
 P_WATER_URGENT = 20
 
@@ -515,8 +519,15 @@ def _decide(obs, config=None):
     deficits = []
     for crop, share in _crop_mix(day, prices).items():
         c = CROPS[crop]
-        # Nothing that cannot reach its first yield before the season ends.
-        if day + c["first"] > last_day:
+        # Nothing that cannot reach its first yield before the season ends. For the
+        # ongoing crops, insist on the *whole* cycle: strawberry fruits at ages 10,
+        # 12, 14 and 16, so one sown after day 13 can never finish, and the tile is
+        # worth more under a fast crop. Sowing them to the first-yield deadline was
+        # why strawberry averaged 2.4 units a plant instead of 4.
+        span = c["first"]
+        if c["ongoing"]:
+            span += (c["maxyield"] - 1) * c.get("interval", 1)
+        if day + span > last_day:
             continue
         if crop == "MELON" and not PHASED:
             target = _melon_target(day, unlocked_tiles, money,
@@ -796,7 +807,7 @@ def _decide(obs, config=None):
         want = demand.get(crop, 0)
         if not want:
             continue
-        reserve = (100 if opening else 600) if crop == "MELON" else 300
+        reserve = (100 if opening else max(600, CASH_FLOOR)) if crop == "MELON" else CASH_FLOOR
         have = seeds.get(crop, 0)
         spare = int(money) - reserve
         if want > have and spare > 0:

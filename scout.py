@@ -13,6 +13,13 @@ import collections
 import glob
 import json
 import os
+import sys
+
+
+def _say(text):
+    """Print without dying on a non-ASCII opponent name (Windows console is cp1252)."""
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    sys.stdout.write(text.encode(enc, "replace").decode(enc) + "\n")
 
 
 def tile_counts(farm):
@@ -109,17 +116,17 @@ def main():
             verdict = "WIN " if us > them else "LOSS"
             wins += us > them
             losses += us <= them
-        print(f"\n=== episode {s['id']}  {verdict}   us {us:,.0f}  "
-              f"them {them:,.0f} ({s['names'][1]}) ===")
+        _say(f"\n=== episode {s['id']}  {verdict}   us {us:,.0f}  "
+             f"them {them:,.0f} ({s['names'][1]}) ===")
         for p, who in ((0, "us  "), (1, "them")):
             top = ", ".join(f"{k}:{v}" for k, v in s["peak"][p].most_common()
                             if k not in ("locked", "empty"))
-            print(f"  {who}  melon planted day {str(s['first_melon'][p]):<5} "
-                  f"first big sale day {str(s['first_sale'][p]):<5} "
-                  f"quads {s['quads'][p]}")
-            print(f"        peak farm: {top}")
+            _say(f"  {who}  melon planted day {str(s['first_melon'][p]):<5} "
+                 f"first big sale day {str(s['first_sale'][p]):<5} "
+                 f"quads {s['quads'][p]}")
+            _say(f"        peak farm: {top}")
 
-    print(f"\n{wins} win(s), {losses} loss(es) across {len(files)} replays")
+    _say(f"\n{wins} win(s), {losses} loss(es) across {len(files)} replays")
 
 
 if __name__ == "__main__":
