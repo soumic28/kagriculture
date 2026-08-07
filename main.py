@@ -161,6 +161,10 @@ URGENCY = int(_env("KAG_URGENCY", 0))
 COUNT_CARRIED = int(_env("KAG_COUNT_CARRIED", 0))
 # Buy wheat from the market to keep the feed store stocked.
 BUY_FEED = int(_env("KAG_BUY_FEED", 1))
+# Spare pens beyond the herd target. Cows and sheep share pastures and we
+# deliberately over-buy as a death buffer, so without slack the cows (bought first)
+# occupy pens the sheep were counted for.
+PEN_BUFFER = int(_env("KAG_PEN_BUFFER", 4))
 # Cash never spent on seed. Running the bank to zero mid-season blocks feed buying
 # and livestock exactly when the herd is scaling, and the elite farms sit on
 # ~$14k at day 12 while we were hitting $0.
@@ -556,8 +560,13 @@ def _decide(obs, config=None):
     want_herd = _herd_target(day, money, herd, last_day)
     need_pen = {}
     for animal, n_want in want_herd.items():
+        if not n_want:
+            continue
         kind = LIVESTOCK[animal]["struct"]
         need_pen[kind] = need_pen.get(kind, 0) + n_want
+    if PEN_BUFFER:
+        for kind in list(need_pen):
+            need_pen[kind] += PEN_BUFFER
     pen_slots = {k: max(0, v - structures.get(k, 0)) for k, v in need_pen.items()}
 
     # Pens go on the tiles closest to the shed: every animal needs a wheat delivery
@@ -854,7 +863,14 @@ def _decide(obs, config=None):
     # only buy up to this species' own shortfall, or one species would take every pen.
     if True:
         pen_budget = {k: len(v) for k, v in pens_free.items()}
-        for animal in sorted(LIVESTOCK, key=lambda a: LIVESTOCK[a]["cost"]):
+        # Order by how soon the animal starts producing, not by price. Cows and
+        # sheep share pastures, so buying cheapest-first let cows claim every pen
+        # as it was built and sheep waited on cash -- sheep reached only 53% of
+        # their possible animal-days against the cows' 98%. Sheep first-yield on
+        # day 6 against a cow's day 8, and wool is worth $4,000/day of town demand
+        # against milk's $4,160, so the cheaper animal was not the better buy.
+        for animal in sorted(LIVESTOCK, key=lambda a: (LIVESTOCK[a]["first"],
+                                                       LIVESTOCK[a]["cost"])):
             if len(market) >= MAX_ORDERS - 1:
                 break
             kind = LIVESTOCK[animal]["struct"]
