@@ -4,8 +4,10 @@
 .kaggle/
 .venv/
 __pycache__/
+eps*.txt
 kaggriculture-data/
 logs/
 replay.json
 replays/
+replays_*/
 submission.tar.gz
