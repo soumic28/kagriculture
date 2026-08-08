@@ -280,6 +280,49 @@ Every dial is at a local optimum. The gap is **execution, not allocation** — t
 service 40 strawberry tiles and day-2 livestock, and our engine starves when asked to.
 See `PLAN.md`.
 
+## What now decides a game (v12, 41 ranked episodes, 21W-20L)
+
+Our score tracks the **milk and wool price** almost perfectly. Across all 41 replays:
+
+| Final milk / wool price | Our score |
+|---|---|
+| milk 230-300, wool 220-250 | **100,000-122,000** |
+| milk < 150 or wool < 50 | **22,000-70,000** |
+
+Every disaster game (22k, 29k, 63k, 64k, 67k, 69k) has milk and/or wool collapsed to
+near the $1 floor. **Strawberry never crashed** — it held 208-280 in all 41 games.
+
+The supply arithmetic explains it exactly. Two standard farms against town demand:
+
+| Product | Town/day | 2-farm supply/day | Ratio |
+|---|---|---|---|
+| Strawberry | 32 | 18.8 | **0.59** safe |
+| Wool | 20 | 16.0 | 0.80 |
+| Milk | 26 | 24.0 | **0.92** on the edge |
+
+Milk and wool sit at the limit with two *standard* farms, and opponents now run herds
+of 9-28 head, which pushes past 1.0 and collapses both. Strawberry has real headroom.
+
+**The field has converged.** Two days ago most opponents grew melon or nothing;
+now nearly every one runs livestock (herd 9-28) and strawberry (30-47 tiles). Scores
+on both sides fall in the later episodes as the shared markets get contested harder.
+
+### Neither obvious response works
+
+| Response | Result |
+|---|---|
+| Leaner herd (5 cows / 3 sheep) to stop crashing wool and milk | **loses 0/8** |
+| More strawberry (0.62) to lean on the market with headroom | **loses 3/8** |
+| More strawberry *under a forced crash* (12 cows / 10 sheep both sides) | **loses 2/8** |
+
+Cutting supply is the melon lesson again: it is a race, not a commons. Unilateral
+restraint just hands the town's demand to the rival, who sells into it instead.
+
+The remaining variance is therefore **opponent-driven and not fixable by allocation**.
+The untried angle is to stop *spending actions* on a collapsed product — a cow at a
+$5 milk price still costs feed, care and harvest every day, and those actions would be
+worth more on crops. `KAG_CARE` exists but is not price-aware.
+
 ## Open risks
 
 1. **The melon market is shared, and this strategy depends on it.** In self-play the
