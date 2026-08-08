@@ -189,6 +189,18 @@ PRODUCT_BASE = {"WHEAT": 25, "CARROT": 35, "TOMATO": 60, "STRAWBERRY": 120,
 # draining inventory every turn, so a crashed market recovers on its own -- dumping
 # into the floor converts goods to almost nothing. 0 disables the hold.
 SELL_MIN_RATIO = float(_env("KAG_SELL_MIN_RATIO", 0.0))
+
+# Stop spending *actions* on a product whose price has collapsed. Nothing else in
+# the agent is price-aware about effort: a cow at a $5 milk price still costs a feed,
+# a care and a harvest every day -- three actions for almost nothing, while actions
+# are the binding constraint. Milk and wool are the two markets that actually do
+# collapse (they sit at 0.92 and 0.80 of town demand with two standard farms, and
+# opponents now run 9-28 head), and our score tracks their price almost exactly.
+#
+# Feeding continues regardless: the animal is a sunk $400-500, it still drops a
+# fertilizer a day whether or not it is cared for, and letting it starve is
+# irreversible. Only the discretionary effort stops.
+EFFORT_MIN_RATIO = float(_env("KAG_EFFORT_MIN_RATIO", 0.0))
 P_FEED_URGENT = 21
 P_WATER_URGENT = 20
 
@@ -531,12 +543,22 @@ def _decide(obs, config=None):
                     unfed.add((x, y))
                     starving = t["consecutive_unfed"] >= 1
                     jobs.append((P_FEED_URGENT if (URGENCY and starving) else P_FEED, x, y, ["FEED"]))
-                if t["yield_units"] > 0:
+                # Is this animal's product still worth working for?
+                prod = LIVESTOCK.get(t["animal"], {}).get("product")
+                base_p = PRODUCT_BASE.get(prod, 1)
+                slumped = (EFFORT_MIN_RATIO
+                           and prices.get(prod, base_p) < EFFORT_MIN_RATIO * base_p)
+                # At a collapsed price, only harvest once the tile is nearly full, so
+                # the trip carries a worthwhile load instead of one near-worthless unit.
+                if t["yield_units"] > 0 and not (slumped and t["yield_units"] < 4):
                     jobs.append((P_HARVEST, x, y, ["HARVEST"]))
+                # Fertilizer accrues whatever the product price does, and is collected
+                # regardless -- it is a separate market.
                 if t["fertilizer_available"]:
                     jobs.append((P_FERT, x, y, ["COLLECT_FERTILIZER"]))
-                # CARE only banks a bonus on a day the animal is also fed.
-                if CARE_ENABLED and not t["cared_today"] and (
+                # CARE only banks a bonus on a day the animal is also fed, and that
+                # bonus is worthless when the product is at the floor.
+                if CARE_ENABLED and not slumped and not t["cared_today"] and (
                     t["fed_today"] or hungry
                 ):
                     jobs.append((P_CARE, x, y, ["CARE"]))
